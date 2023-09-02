@@ -1,12 +1,18 @@
+from functools import wraps
 from flask import Flask, jsonify, make_response, request
 import mysql.connector
-import PIL.Image as Image
+# import PIL.Image as Image
+# from io import BytesIO
 import base64
-from io import BytesIO
 import os
 import numpy as np
 from flask_cors import CORS
 import cv2
+import os
+from protect_routes import generate_token,verify_token
+import base64
+
+secret_key = os.urandom(24)  # Gera uma chave de 24 bytes (192 bits)
 
 mysql = mysql.connector.connect(
     host='localhost',
@@ -17,14 +23,36 @@ mysql = mysql.connector.connect(
 
 app = Flask(__name__)
 
+app.config['SECRET_KEY'] = secret_key  
+
 CORS(app)  # Isso permite solicitações de todas as origens. Você pode ajustar isso para permitir origens específicas.
+
+
 print("Versão do OpenCV:", cv2.__version__)
+
 # Carregar o modelo de detecção facial do OpenCV
 detectorFace = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 # Criar o reconhecedor de faces
 reconhecedor = cv2.face_EigenFaceRecognizer.create()
 # Definir o tamanho das imagens de treinamento (largura, altura)
 width, height = 220, 220
+
+# Verificar se o token é valido
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = request.headers.get('Authorization')
+        if not token:
+            return jsonify({'message': 'Token de autenticação faltando'}), 401
+
+        username = verify_token(token)
+        if isinstance(username, str):
+            return jsonify({'message': username}), 401
+
+        return f(username, *args, **kwargs)
+
+    return decorated
+
 
 #listar usuários
 @app.route('/usuarios/listar',methods=['GET'])
@@ -81,9 +109,9 @@ def obter_usuario_por_id(idUsuario):
 def obter_usuario():
     requestData = request.json
     my_cursor = mysql.cursor()
-    query = 'SELECT * FROM users WHERE usuario = %s AND password = %s'
+    query = 'SELECT * FROM users WHERE usuario = %s'
   
-    my_cursor.execute(query, (requestData['username'], requestData['senha']))
+    my_cursor.execute(query, (requestData['username'],))
 
     usuario = my_cursor.fetchall()
     lista_usuarios = list()
@@ -92,7 +120,7 @@ def obter_usuario():
             {
                 'id':user[0],
                 'usuario':user[1],
-                'email':user[3],
+                'email':user[2],
             }
         )
    
@@ -102,7 +130,7 @@ def obter_usuario():
         return make_response(
             jsonify(
                 type='success',
-                mensagem='Usuário autenticado com sucesso!',
+                mensagem='Usuário presente na base de dados!',
                 usuario=lista_usuarios
             ),200)
     else:
@@ -130,14 +158,14 @@ def incluir_novo_usuario():
         email_verificado = my_cursor.fetchall()  
         
 
-        if email_verificado and usuario_verificado:
-            return make_response(
-                        jsonify(
-                            mensagem='Nome de Usuário e e-mail já Cadastrados!',
-                            type='warning',
-                        ),
-                        200  
-                    )
+        # if email_verificado and usuario_verificado:
+        #     return make_response(
+        #                 jsonify(
+        #                     mensagem='Nome de Usuário e e-mail já Cadastrados!',
+        #                     type='warning',
+        #                 ),
+        #                 200  
+        #             )
         
         if usuario_verificado:
             return make_response(
@@ -241,7 +269,6 @@ def visualizar_imagens():
     else:
         return jsonify({"mensagem": "Informe o Id do usuário.",'type':"warning"}), 400  
 
-
 #Verificar Rosto Usuário
 @app.route('/usuarios/verificarRosto', methods=['POST'])
 def recognize_face():
@@ -312,6 +339,94 @@ def recognize_face():
     }
 
     return make_response(jsonify(response_data), 200)
+
+#autenticar usuário
+@app.route('/usuarios/gerarToken', methods=['POST'])
+def auth_usuario():
+    requestData = request.json
+    # Decodificar a string Base64
+    decoded_bytes = base64.b64decode(requestData['username'])
+    # Converta os bytes decodificados de volta para uma string
+    userNameDecode = decoded_bytes.decode('utf-8')
+    my_cursor = mysql.cursor()
+    query = 'SELECT * FROM users WHERE usuario = %s AND password = %s'
+  
+    my_cursor.execute(query, (userNameDecode,requestData['password']))
+
+    usuario = my_cursor.fetchall()
+    lista_usuarios = list()
+    for user in usuario:
+        lista_usuarios.append(
+            {
+                'id':user[0],
+                'usuario':user[1],
+                'email':user[3],
+            }
+        )
+   
+    my_cursor.close()
+
+    if(len(lista_usuarios) > 0) :
+        return make_response(
+            jsonify(
+                type='success',
+                mensagem='Usuário reconhecido com sucesso!',
+                usuario=lista_usuarios,
+                token = generate_token(userNameDecode,requestData['password'],app)
+            ),200)
+    else:
+        return make_response(
+            jsonify(
+                type='warning',
+                mensagem='Usuário não reconhecido!',
+                usuario=[],
+                token=''
+            ),200)
+
+#Teste token verificacao
+@app.route('/itens/listar', methods=['POST'])
+@token_required
+def itens_listar():
+    requestData = request.json
+    # Decodificar a string Base64
+    decoded_bytes = base64.b64decode(requestData['username'])
+    # Converta os bytes decodificados de volta para uma string
+    userNameDecode = decoded_bytes.decode('utf-8')
+    my_cursor = mysql.cursor()
+    query = 'SELECT * FROM users WHERE usuario = %s AND password = %s'
+  
+    my_cursor.execute(query, (userNameDecode,requestData['password']))
+
+    usuario = my_cursor.fetchall()
+    lista_usuarios = list()
+    for user in usuario:
+        lista_usuarios.append(
+            {
+                'id':user[0],
+                'usuario':user[1],
+                'email':user[3],
+            }
+        )
+   
+    my_cursor.close()
+
+    if(len(lista_usuarios) > 0) :
+        return make_response(
+            jsonify(
+                type='success',
+                mensagem='Usuário reconhecido com sucesso!',
+                usuario=lista_usuarios,
+                token = generate_token(userNameDecode,requestData['password'],app)
+            ),200)
+    else:
+        return make_response(
+            jsonify(
+                type='warning',
+                mensagem='Usuário não reconhecido!',
+                usuario=[],
+                token=''
+            ),200)
+
 
 
 app.run(host='localhost',port=5000,debug=True)
