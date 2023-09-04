@@ -289,7 +289,8 @@ def visualizar_imagens():
 
 #Verificar Rosto Usuário
 @app.route('/usuarios/verificarRosto', methods=['POST'])
-def recognize_face():
+@token_required
+def recognize_face(token):
     data = request.json
     image_base64 = data['fotoUsuario']
     id_usuario = data['idUsuario']
@@ -347,13 +348,15 @@ def recognize_face():
 
     if recognized:
         result_message = "Usuário reconhecido"
+        bolReconhecido=True
     else:
         result_message = "Usuário não reconhecido"
-
+        bolReconhecido=False
     response_data = {
-        'result': result_message,
+        'mensagem': result_message,
         'confidence_level': confidence_level,
-        'user_info': user_info
+        'user_info': user_info,
+        'reconhecido':bolReconhecido
     }
 
     return make_response(jsonify(response_data), 200)
@@ -370,7 +373,6 @@ def auth_usuario():
     query = 'SELECT * FROM users WHERE usuario = %s AND password = %s'
   
     my_cursor.execute(query, (userNameDecode,requestData['password']))
-    print(userNameDecode)
     usuario = my_cursor.fetchall()
     lista_usuarios = list()
     for user in usuario:
@@ -405,10 +407,7 @@ def auth_usuario():
 @app.route('/itens/listar', methods=['GET'])
 @token_required
 def itens_listar(token):
-    print("entrou")
-    print(token)
     idUsuario = request.args.get('idUsuario', type=int)
-    print(idUsuario)
     my_cursor = mysql.cursor()
     if(idUsuario) :
         query = 'SELECT * FROM itensEstoque WHERE idUsuarioCriador = %s'
@@ -418,7 +417,6 @@ def itens_listar(token):
         my_cursor.execute(query)
 
     itens = my_cursor.fetchall()
-    print(itens)
     lista_itens = [
         {
             'idItem': item[0],
@@ -427,6 +425,7 @@ def itens_listar(token):
             'valorItem': item[3],
             'usuarioCriadorId': item[4],
             'nomeUsuarioCriador': item[5],
+            'descricaoItem': item[6],
         }
         for item in itens
     ]
@@ -447,12 +446,12 @@ def itens_listar(token):
 #Remover Itens
 @app.route('/itens/remover', methods=['POST'])
 @token_required
-def itens_remover():
+def itens_remover(token):
     requestData = request.json
     my_cursor = mysql.cursor()
-    if(requestData['idItem']) :
+    if(requestData['itemId']) :
         query = 'DELETE  FROM itensEstoque WHERE itemId = %s'
-        my_cursor.execute(query, (requestData['idItem']))
+        my_cursor.execute(query, (requestData['itemId'],))
     else:
          return make_response(
             jsonify(
@@ -466,6 +465,7 @@ def itens_remover():
             jsonify(
                 mensagem='Item removido com sucesso!',
                 type='success',
+                id=requestData['itemId']
             ),
             200  
         )
@@ -473,12 +473,15 @@ def itens_remover():
 #Criar Itens
 @app.route('/itens/criar', methods=['POST'])
 @token_required
-def itens_criar():
+def itens_criar(token):
     requestData = request.json
     my_cursor = mysql.cursor()
-    if 'nomeItem' in requestData and 'valorItem' in requestData and 'idUsuarioCriador' in requestData and 'nomeUsuarioCriador' in requestData:
-        query = "INSERT INTO itensEstoque (nomeItem, valorItem, idUsuarioCriador, nomeUsuarioCriador) VALUES (%s, %s, %s, %s)"
-        my_cursor.execute(query, (requestData['nomeItem'],requestData['valorItem'],requestData['idUsuarioCriador'],requestData['nomeUsuarioCriador']))
+    data_hora_atual = datetime.datetime.now()
+    novo_id = 0
+    if 'nomeItem' in requestData and 'valorItem' in requestData and 'idUsuarioCriador' in requestData and 'nomeUsuarioCriador' in requestData and 'descricao' in requestData:
+        query = "INSERT INTO itensEstoque (nomeItem, valorItem, idUsuarioCriador, nomeUsuarioCriador, descricao) VALUES (%s, %s, %s, %s, %s)"
+        my_cursor.execute(query, (requestData['nomeItem'],requestData['valorItem'],requestData['idUsuarioCriador'],requestData['nomeUsuarioCriador'],requestData['descricao']))
+        novo_id = my_cursor.lastrowid 
     else:
          return make_response(
             jsonify(
@@ -492,7 +495,15 @@ def itens_criar():
             jsonify(
                 mensagem='Item adicionado com sucesso!',
                 type='success',
-                item=requestData
+                item={
+            'idItem': novo_id,
+            'nomeItem': requestData['nomeItem'],
+            'dataCriacao': data_hora_atual.strftime('%Y-%m-%d %H:%M:%S'),
+            'valorItem': requestData['valorItem'],
+            'usuarioCriadorId': requestData['idUsuarioCriador'],
+            'nomeUsuarioCriador': requestData['nomeUsuarioCriador'],
+            'descricaoItem': requestData['descricao'],
+        }
             ),
             200  
         )
@@ -500,12 +511,14 @@ def itens_criar():
 #Alterar Valor Item
 @app.route('/itens/alterarValor', methods=['POST'])
 @token_required
-def itens_alterar_valor():
+def itens_alterar_valor(token):
     requestData = request.json
     my_cursor = mysql.cursor()
+    novo_id = 0
     if 'itemId' in requestData and 'valorItem' in requestData:
-        query = "UPDATE itensEstoque SET valorItem = %s WHERE id_coluna = %s"
+        query = "UPDATE itensEstoque SET valorItem = %s WHERE itemId = %s"
         my_cursor.execute(query, (requestData['valorItem'],requestData['itemId']))
+
     else:
          
          return make_response(
@@ -515,12 +528,12 @@ def itens_alterar_valor():
             ),200)
     mysql.commit()
     my_cursor.close()
-
+    print(novo_id)
     return make_response(
             jsonify(
-                mensagem='Valor do item alterado com sucesso!',
+                mensagem = 'Valor do item alterado com sucesso!',
                 type='success',
-                item=requestData
+                id=requestData['itemId']
             ),
             200  
         )
