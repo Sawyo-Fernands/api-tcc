@@ -18,6 +18,7 @@ def verify_token(token,app):
     try:
         payload = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
         return payload['sub']
+    
     except jwt.ExpiredSignatureError:
         return 'Token expirado. Faça login novamente.'
     except jwt.InvalidTokenError:

@@ -1,18 +1,15 @@
 from functools import wraps
 from flask import Flask, jsonify, make_response, request
 import mysql.connector
-# import PIL.Image as Image
-# from io import BytesIO
 import base64
 import os
 import numpy as np
 from flask_cors import CORS
 import cv2
 import os
-from protect_routes import generate_token,verify_token
 import base64
-
-secret_key = os.urandom(24)  # Gera uma chave de 24 bytes (192 bits)
+import jwt
+import datetime
 
 mysql = mysql.connector.connect(
     host='localhost',
@@ -23,7 +20,7 @@ mysql = mysql.connector.connect(
 
 app = Flask(__name__)
 
-app.config['SECRET_KEY'] = secret_key  
+key = "secret"
 
 CORS(app)  # Isso permite solicitações de todas as origens. Você pode ajustar isso para permitir origens específicas.
 
@@ -37,22 +34,43 @@ reconhecedor = cv2.face_EigenFaceRecognizer.create()
 # Definir o tamanho das imagens de treinamento (largura, altura)
 width, height = 220, 220
 
+# Função responsável por gerar o token
+def generate_token(username, password):
+    expiration_date = datetime.datetime.utcnow() + datetime.timedelta(days=1)
+    payload = {
+        'exp': expiration_date,
+        'iat': datetime.datetime.utcnow(),
+        'sub': username,
+        'password': password
+    }
+    token = jwt.encode(payload, key, algorithm='HS256')
+    return token
+
+# Função que Verifica se o Token é válido
+def verify_token(token):
+    try:
+        payload = jwt.decode(token, key, algorithms=['HS256'])
+        return payload
+    except jwt.ExpiredSignatureError:
+        return 'Token expirado. Faça login novamente.'
+    except jwt.InvalidTokenError as e:
+        return f'Token inválido. Faça login novamente.'
+
 # Verificar se o token é valido
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         token = request.headers.get('Authorization')
         if not token:
-            return jsonify({'message': 'Token de autenticação faltando'}), 401
+            return jsonify({'message': 'Token de autenticação não enviado!'}), 401
+     
+        payload = verify_token(token.split(' ')[1])
+        if isinstance(payload, str):
+            return jsonify({'message': payload}), 401
 
-        username = verify_token(token)
-        if isinstance(username, str):
-            return jsonify({'message': username}), 401
-
-        return f(username, *args, **kwargs)
-
+        return f(token, *args, **kwargs)
+    
     return decorated
-
 
 #listar usuários
 @app.route('/usuarios/listar',methods=['GET'])
@@ -352,7 +370,7 @@ def auth_usuario():
     query = 'SELECT * FROM users WHERE usuario = %s AND password = %s'
   
     my_cursor.execute(query, (userNameDecode,requestData['password']))
-
+    print(userNameDecode)
     usuario = my_cursor.fetchall()
     lista_usuarios = list()
     for user in usuario:
@@ -365,14 +383,14 @@ def auth_usuario():
         )
    
     my_cursor.close()
-
+    token = generate_token(userNameDecode,requestData['password'])
     if(len(lista_usuarios) > 0) :
         return make_response(
             jsonify(
                 type='success',
                 mensagem='Usuário reconhecido com sucesso!',
-                usuario=lista_usuarios,
-                token = generate_token(userNameDecode,requestData['password'],app)
+                usuario= lista_usuarios,
+                token = token
             ),200)
     else:
         return make_response(
@@ -383,50 +401,129 @@ def auth_usuario():
                 token=''
             ),200)
 
-#Teste token verificacao
-@app.route('/itens/listar', methods=['POST'])
+#Listar itens
+@app.route('/itens/listar', methods=['GET'])
 @token_required
-def itens_listar():
-    requestData = request.json
-    # Decodificar a string Base64
-    decoded_bytes = base64.b64decode(requestData['username'])
-    # Converta os bytes decodificados de volta para uma string
-    userNameDecode = decoded_bytes.decode('utf-8')
+def itens_listar(token):
+    print("entrou")
+    print(token)
+    idUsuario = request.args.get('idUsuario', type=int)
+    print(idUsuario)
     my_cursor = mysql.cursor()
-    query = 'SELECT * FROM users WHERE usuario = %s AND password = %s'
-  
-    my_cursor.execute(query, (userNameDecode,requestData['password']))
+    if(idUsuario) :
+        query = 'SELECT * FROM itensEstoque WHERE idUsuarioCriador = %s'
+        my_cursor.execute(query, (idUsuario))
+    else:
+        query = 'SELECT * FROM itensEstoque'
+        my_cursor.execute(query)
 
-    usuario = my_cursor.fetchall()
-    lista_usuarios = list()
-    for user in usuario:
-        lista_usuarios.append(
-            {
-                'id':user[0],
-                'usuario':user[1],
-                'email':user[3],
-            }
-        )
+    itens = my_cursor.fetchall()
+    print(itens)
+    lista_itens = [
+        {
+            'idItem': item[0],
+            'nomeItem': item[1],
+            'dataCriacao': item[2],
+            'valorItem': item[3],
+            'usuarioCriadorId': item[4],
+            'nomeUsuarioCriador': item[5],
+        }
+        for item in itens
+    ]
    
     my_cursor.close()
 
-    if(len(lista_usuarios) > 0) :
+    if(len(lista_itens) > 0) :
         return make_response(
             jsonify(
-                type='success',
-                mensagem='Usuário reconhecido com sucesso!',
-                usuario=lista_usuarios,
-                token = generate_token(userNameDecode,requestData['password'],app)
+                lista_itens
             ),200)
     else:
         return make_response(
             jsonify(
-                type='warning',
-                mensagem='Usuário não reconhecido!',
-                usuario=[],
-                token=''
+                lista_itens
             ),200)
 
+#Remover Itens
+@app.route('/itens/remover', methods=['POST'])
+@token_required
+def itens_remover():
+    requestData = request.json
+    my_cursor = mysql.cursor()
+    if(requestData['idItem']) :
+        query = 'DELETE  FROM itensEstoque WHERE itemId = %s'
+        my_cursor.execute(query, (requestData['idItem']))
+    else:
+         return make_response(
+            jsonify(
+                type='warning',
+                mensagem='Informe o id do item!'
+            ),200)
+    mysql.commit()
+    my_cursor.close()
+
+    return make_response(
+            jsonify(
+                mensagem='Item removido com sucesso!',
+                type='success',
+            ),
+            200  
+        )
+
+#Criar Itens
+@app.route('/itens/criar', methods=['POST'])
+@token_required
+def itens_criar():
+    requestData = request.json
+    my_cursor = mysql.cursor()
+    if 'nomeItem' in requestData and 'valorItem' in requestData and 'idUsuarioCriador' in requestData and 'nomeUsuarioCriador' in requestData:
+        query = "INSERT INTO itensEstoque (nomeItem, valorItem, idUsuarioCriador, nomeUsuarioCriador) VALUES (%s, %s, %s, %s)"
+        my_cursor.execute(query, (requestData['nomeItem'],requestData['valorItem'],requestData['idUsuarioCriador'],requestData['nomeUsuarioCriador']))
+    else:
+         return make_response(
+            jsonify(
+                type='warning',
+                mensagem='Preencha todos os campos!'
+            ),200)
+    mysql.commit()
+    my_cursor.close()
+
+    return make_response(
+            jsonify(
+                mensagem='Item adicionado com sucesso!',
+                type='success',
+                item=requestData
+            ),
+            200  
+        )
+
+#Alterar Valor Item
+@app.route('/itens/alterarValor', methods=['POST'])
+@token_required
+def itens_alterar_valor():
+    requestData = request.json
+    my_cursor = mysql.cursor()
+    if 'itemId' in requestData and 'valorItem' in requestData:
+        query = "UPDATE itensEstoque SET valorItem = %s WHERE id_coluna = %s"
+        my_cursor.execute(query, (requestData['valorItem'],requestData['itemId']))
+    else:
+         
+         return make_response(
+            jsonify(
+                type='warning',
+                mensagem='Preencha todos os campos!'
+            ),200)
+    mysql.commit()
+    my_cursor.close()
+
+    return make_response(
+            jsonify(
+                mensagem='Valor do item alterado com sucesso!',
+                type='success',
+                item=requestData
+            ),
+            200  
+        )
 
 
 app.run(host='localhost',port=5000,debug=True)
